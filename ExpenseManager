@@ -1,0 +1,255 @@
+
+import javax.swing.*;
+import javax.swing.table.DefaultTableModel;
+import java.awt.*;
+import java.sql.*;
+
+public class ExpenseManager extends JFrame {
+
+    JTextField id = new JTextField();
+    JTextField date = new JTextField();
+    JTextField description = new JTextField();
+    JTextField amount = new JTextField();
+    JTextField month = new JTextField();
+
+    JComboBox<String> category = new JComboBox<>(
+        new String[]{"Food", "Travel", "Education",
+                     "Shopping", "Bills", "Other"}
+    );
+
+    DefaultTableModel model = new DefaultTableModel(
+        new String[]{"ID", "Date", "Category", "Description", "Amount"}, 0
+    );
+
+    JTable table = new JTable(model);
+    JLabel total = new JLabel("Monthly Total: 0.00");
+    Connection con;
+
+    ExpenseManager() {
+        setTitle("Personal Expense Tracker");
+        setSize(850, 550);
+        setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+        setLayout(new BorderLayout(5, 5));
+
+        try {
+            String url = "jdbc:oracle:thin:@//HOST:1521/SERVICE_NAME";
+            con = DriverManager.getConnection(
+                url, "YOUR_USERNAME", "YOUR_PASSWORD"
+            );
+        } catch (SQLException e) {
+            JOptionPane.showMessageDialog(
+                this, "Database connection failed:\n" + e.getMessage()
+            );
+        }
+
+        JPanel form = new JPanel(new GridLayout(4, 4, 5, 5));
+        form.add(new JLabel("ID"));
+        form.add(id);
+        form.add(new JLabel("Date (YYYY-MM-DD)"));
+        form.add(date);
+        form.add(new JLabel("Category"));
+        form.add(category);
+        form.add(new JLabel("Description"));
+        form.add(description);
+        form.add(new JLabel("Amount"));
+        form.add(amount);
+        form.add(new JLabel("Month (YYYY-MM)"));
+        form.add(month);
+
+        JButton add = new JButton("Add");
+        JButton view = new JButton("View Month");
+        JButton update = new JButton("Update");
+        JButton delete = new JButton("Delete");
+        JButton totals = new JButton("Category Totals");
+
+        form.add(add);
+        form.add(view);
+        form.add(update);
+        form.add(delete);
+
+        add(form, BorderLayout.NORTH);
+        add(new JScrollPane(table), BorderLayout.CENTER);
+
+        JPanel bottom = new JPanel();
+        bottom.add(totals);
+        bottom.add(total);
+        add(bottom, BorderLayout.SOUTH);
+
+        add.addActionListener(e -> addExpense());
+        view.addActionListener(e -> viewMonth());
+        update.addActionListener(e -> updateExpense());
+        delete.addActionListener(e -> deleteExpense());
+        totals.addActionListener(e -> categoryTotals());
+
+        table.getSelectionModel().addListSelectionListener(e -> {
+            if (!e.getValueIsAdjusting() && table.getSelectedRow() >= 0) {
+                int r = table.getSelectedRow();
+                id.setText(model.getValueAt(r, 0).toString());
+                date.setText(model.getValueAt(r, 1).toString());
+                category.setSelectedItem(model.getValueAt(r, 2).toString());
+                description.setText(model.getValueAt(r, 3).toString());
+                amount.setText(model.getValueAt(r, 4).toString());
+            }
+        });
+
+        setLocationRelativeTo(null);
+        setVisible(true);
+    }
+
+    void addExpense() {
+        if (con == null) return;
+
+        try (PreparedStatement ps = con.prepareStatement(
+            "INSERT INTO expenses " +
+            "(expense_date, category, description, amount) VALUES (?, ?, ?, ?)"
+        )) {
+            ps.setDate(1, Date.valueOf(date.getText().trim()));
+            ps.setString(2, category.getSelectedItem().toString());
+            ps.setString(3, description.getText());
+            ps.setDouble(4, Double.parseDouble(amount.getText().trim()));
+            ps.executeUpdate();
+
+            JOptionPane.showMessageDialog(this, "Expense added!");
+            viewMonth();
+        } catch (Exception e) {
+            showError(e);
+        }
+    }
+
+    void viewMonth() {
+        if (con == null) return;
+
+        try {
+            String m = month.getText().trim();
+            if (!m.matches("\\d{4}-\\d{2}")) {
+                throw new IllegalArgumentException("Enter month as YYYY-MM");
+            }
+
+            Date start = Date.valueOf(m + "-01");
+            Date end = Date.valueOf(
+                java.time.LocalDate.parse(m + "-01")
+                    .plusMonths(1).toString()
+            );
+
+            model.setRowCount(0);
+
+            try (PreparedStatement ps = con.prepareStatement(
+                "SELECT id, expense_date, category, description, amount " +
+                "FROM expenses WHERE expense_date >= ? " +
+                "AND expense_date < ? ORDER BY expense_date"
+            )) {
+                ps.setDate(1, start);
+                ps.setDate(2, end);
+
+                try (ResultSet rs = ps.executeQuery()) {
+                    double sum = 0;
+
+                    while (rs.next()) {
+                        double a = rs.getDouble("amount");
+                        sum += a;
+                        model.addRow(new Object[]{
+                            rs.getInt("id"), rs.getDate("expense_date"),
+                            rs.getString("category"),
+                            rs.getString("description"), a
+                        });
+                    }
+
+                    total.setText(String.format("Monthly Total: %.2f", sum));
+                }
+            }
+        } catch (Exception e) {
+            showError(e);
+        }
+    }
+
+    void updateExpense() {
+        if (con == null) return;
+
+        try (PreparedStatement ps = con.prepareStatement(
+            "UPDATE expenses SET expense_date=?, category=?, " +
+            "description=?, amount=? WHERE id=?"
+        )) {
+            ps.setDate(1, Date.valueOf(date.getText().trim()));
+            ps.setString(2, category.getSelectedItem().toString());
+            ps.setString(3, description.getText());
+            ps.setDouble(4, Double.parseDouble(amount.getText().trim()));
+            ps.setInt(5, Integer.parseInt(id.getText().trim()));
+
+            int n = ps.executeUpdate();
+            JOptionPane.showMessageDialog(this,
+                n > 0 ? "Expense updated!" : "Expense ID not found");
+            viewMonth();
+        } catch (Exception e) {
+            showError(e);
+        }
+    }
+
+    void deleteExpense() {
+        if (con == null) return;
+
+        try (PreparedStatement ps = con.prepareStatement(
+            "DELETE FROM expenses WHERE id=?"
+        )) {
+            ps.setInt(1, Integer.parseInt(id.getText().trim()));
+
+            int n = ps.executeUpdate();
+            JOptionPane.showMessageDialog(this,
+                n > 0 ? "Expense deleted!" : "Expense ID not found");
+            viewMonth();
+        } catch (Exception e) {
+            showError(e);
+        }
+    }
+
+    void categoryTotals() {
+        if (con == null) return;
+
+        try {
+            String m = month.getText().trim();
+            if (!m.matches("\\d{4}-\\d{2}")) {
+                throw new IllegalArgumentException("Enter month as YYYY-MM");
+            }
+
+            Date start = Date.valueOf(m + "-01");
+            Date end = Date.valueOf(
+                java.time.LocalDate.parse(m + "-01")
+                    .plusMonths(1).toString()
+            );
+
+            StringBuilder result =
+                new StringBuilder("Category-wise Totals\n\n");
+
+            try (PreparedStatement ps = con.prepareStatement(
+                "SELECT category, SUM(amount) AS total FROM expenses " +
+                "WHERE expense_date >= ? AND expense_date < ? " +
+                "GROUP BY category ORDER BY category"
+            )) {
+                ps.setDate(1, start);
+                ps.setDate(2, end);
+
+                try (ResultSet rs = ps.executeQuery()) {
+                    while (rs.next()) {
+                        result.append(rs.getString("category"))
+                              .append(": ")
+                              .append(String.format("%.2f",
+                                  rs.getDouble("total")))
+                              .append("\n");
+                    }
+                }
+            }
+
+            JOptionPane.showMessageDialog(this, result.toString());
+        } catch (Exception e) {
+            showError(e);
+        }
+    }
+
+    void showError(Exception e) {
+        JOptionPane.showMessageDialog(this, e.getMessage(),
+            "Error", JOptionPane.ERROR_MESSAGE);
+    }
+
+    public static void main(String[] args) {
+        SwingUtilities.invokeLater(ExpenseManager::new);
+    }
+}
